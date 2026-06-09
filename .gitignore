@@ -1,5 +1,7 @@
 # Environments
+.devcontainer/devcontainer-lock.json
 .env
+.venv
 
 # Super-linter outputs
 super-linter-output
@@ -10,3 +12,6 @@ super-linter.log
 
 # GitHub Actions leftovers
 github_conf
+
+# Added by cargo
+/target

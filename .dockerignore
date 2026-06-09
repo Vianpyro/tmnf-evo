@@ -10,3 +10,23 @@ LICENSE
 # Version control
 .git
 .gitignore
+
+# Rust build artefacts
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+.venv/
+dist/
+*.egg-info/
+
+# Dev tooling
+.devcontainer/
+.git/
+.gitignore
+
+# Generated data — mounted as a volume at runtime
+data/*.json

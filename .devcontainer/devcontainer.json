@@ -1,18 +1,35 @@
 {
-    "name": "Template Development Container",
-    "image": "mcr.microsoft.com/devcontainers/base:bookworm",
-    "customizations": {
-        "settings": {
-            "terminal.integrated.shell.linux": "/bin/bash"
-        },
-        "vscode": {
-            "extensions": [
-                "ms-vscode.atom-keybindings",
-                "ms-vscode-remote.remote-containers",
-                "ms-azuretools.vscode-docker",
-                "myriad-dreamin.tinymist"
-            ]
+    "name": "TrackMania Nations Forever Machine Learning",
+    "image": "mcr.microsoft.com/devcontainers/python:3.10-bookworm",
+    "features": {
+        "ghcr.io/devcontainers/features/rust:1": {
+            "version": "stable",
+            "profile": "minimal"
         }
     },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "tamasfe.even-better-toml"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "[rust]": {
+                    "editor.formatOnSave": true
+                }
+            }
+        }
+    },
+    // Build the Rust extension once the container is up.
+    "postCreateCommand": "pip install maturin tminterface && maturin develop --release",
+    // Tip: run from the WSL2 filesystem (~/), not /mnt/c/ — maturin builds are
+    // significantly faster that way due to cross-filesystem I/O overhead.
+    //
+    // When running the trainer from inside the container, set:
+    //   TMI_HOST = "host.docker.internal"  in python/config.py
+    // Docker Desktop on Windows resolves this to the host automatically.
     "remoteUser": "vscode"
 }

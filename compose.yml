@@ -1,0 +1,48 @@
+services:
+
+  # ── Test ──────────────────────────────────────────────────────────────────
+  # Builds the test stage (runs cargo test at build time), then runs pytest.
+  #
+  #   docker compose run --rm test
+  #
+  test:
+    build:
+      context: .
+      target: test
+    command: pytest python/tests/ -v
+
+  # ── Scout ─────────────────────────────────────────────────────────────────
+  # One-time run to record A01 checkpoint positions.
+  # Requires TMInterface open with A01 loaded and car at the start line.
+  #
+  #   docker compose run --rm scout
+  #
+  scout:
+    build:
+      context: .
+      target: runtime
+    command: python scripts/scout.py
+    environment:
+      TMI_HOST: host.docker.internal
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ── Train ─────────────────────────────────────────────────────────────────
+  # Main training loop. Requires scout to have been run first.
+  # Requires TMInterface open with A01 loaded and car at the start line.
+  #
+  #   docker compose up train
+  #
+  train:
+    build:
+      context: .
+      target: runtime
+    environment:
+      TMI_HOST: host.docker.internal
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

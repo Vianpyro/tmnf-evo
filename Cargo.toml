@@ -1,0 +1,13 @@
+[package]
+name = "tmnf-evo"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "tmnf_evo"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.28.3", features = ["extension-module", "abi3-py310"] }
+rand = "0.10.1"
+rand_distr = "0.6.0"
