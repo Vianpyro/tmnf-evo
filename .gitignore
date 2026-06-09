@@ -15,3 +15,9 @@ github_conf
 
 # Added by cargo
 /target
+
+# Added by Python
+__pycache__/
+
+# Other artifacts
+*.zip
