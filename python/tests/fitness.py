@@ -2,115 +2,125 @@ import math
 import pytest
 from fitness import FitnessTracker
 
-# Three checkpoints on the X axis, 100 units apart.
-CPS = [(0.0, 0.0, 0.0), (100.0, 0.0, 0.0), (200.0, 0.0, 0.0)]
+# Three waypoints in a line, 100 units apart, radius 15.
+WPS = [
+    {"pos": [0.0, 0.0, 0.0], "radius": 15.0},
+    {"pos": [100.0, 0.0, 0.0], "radius": 15.0},
+    {"pos": [200.0, 0.0, 0.0], "radius": 15.0},
+]
 BONUS = 1000.0
 
 
-def tracker() -> FitnessTracker:
-    return FitnessTracker(CPS, BONUS)
+def t() -> FitnessTracker:
+    return FitnessTracker(WPS, BONUS)
 
 
-# ── update() ──────────────────────────────────────────────────────────────────
+# ── update / proximity validation ─────────────────────────────────────────────
 
 class TestUpdate:
-    def test_nearest_checkpoint_selected(self):
-        t = tracker()
-        # (30, 0, 0) is 30 units from cp0 and 70 from cp1.
-        t.update((30.0, 0.0, 0.0))
-        assert t._min_dist == pytest.approx(30.0)
+    def test_tracks_2d_min_dist(self):
+        tr = t()
+        tr.update((50.0, 0.0, 0.0))
+        assert tr._min_dist == pytest.approx(50.0)
 
-    def test_min_dist_is_monotonically_non_increasing(self):
-        t = tracker()
-        t.update((30.0, 0.0, 0.0))
-        t.update((60.0, 0.0, 0.0))  # now farther from cp0, 40 from cp1
-        # min_dist should stay at 30, not grow to 40
-        assert t._min_dist == pytest.approx(30.0)
+    def test_min_dist_non_increasing(self):
+        tr = t()
+        tr.update((30.0, 0.0, 0.0))
+        tr.update((50.0, 0.0, 0.0))
+        assert tr._min_dist == pytest.approx(30.0)
 
-    def test_nearest_unvalidated_points_to_closest(self):
-        t = tracker()
-        # Closer to cp1 (100, 0, 0) than cp0 (0, 0, 0)
-        t.update((90.0, 0.0, 0.0))
-        assert t.nearest_unvalidated == (100.0, 0.0, 0.0)
+    def test_validates_within_radius(self):
+        tr = t()
+        tr.update((5.0, 0.0, 0.0))   # 3D dist = 5 < radius 15
+        assert tr.n_validated == 1
 
-    def test_nearest_unvalidated_none_when_no_checkpoints(self):
-        t = FitnessTracker([], BONUS)
-        t.update((0.0, 0.0, 0.0))
-        assert t.nearest_unvalidated is None
+    def test_no_validate_outside_radius(self):
+        tr = t()
+        tr.update((20.0, 0.0, 0.0))  # 3D dist = 20 > radius 15
+        assert tr.n_validated == 0
 
+    def test_sequential_order_enforced(self):
+        tr = t()
+        # Pass near wp1 without having passed wp0 first — should not validate.
+        tr.update((100.0, 0.0, 0.0))
+        assert tr.n_validated == 0  # wp0 not yet validated
 
-# ── on_checkpoint() ───────────────────────────────────────────────────────────
-
-class TestCheckpoint:
-    def test_nearest_checkpoint_validated(self):
-        t = tracker()
-        t.on_checkpoint((5.0, 0.0, 0.0))  # near cp0
-        assert 0 in t._validated
-
-    def test_non_sequential_validation(self):
-        # Car skips to cp2 — checkpoint 2 should be validated, not 0.
-        t = tracker()
-        t.on_checkpoint((198.0, 0.0, 0.0))
-        assert 2 in t._validated
-        assert 0 not in t._validated
+    def test_advances_target_after_validation(self):
+        tr = t()
+        tr.update((5.0, 0.0, 0.0))
+        assert tr.current_target == (100.0, 0.0, 0.0)
 
     def test_min_dist_resets_after_validation(self):
-        t = tracker()
-        t.update((5.0, 0.0, 0.0))
-        assert t._min_dist < math.inf
-        t.on_checkpoint((1.0, 0.0, 0.0))
-        assert t._min_dist == math.inf
+        tr = t()
+        tr.update((5.0, 0.0, 0.0))
+        assert tr._min_dist == math.inf
 
-    def test_already_validated_not_double_counted(self):
-        t = tracker()
-        t.on_checkpoint((1.0, 0.0, 0.0))   # validates cp0
-        t.on_checkpoint((2.0, 0.0, 0.0))   # car still near cp0 — should validate cp1 now
-        assert 1 in t._validated
-        assert t.n_validated == 2
+    def test_underground_does_not_validate(self):
+        # Directly below wp0 (y=-100): 3D dist ≈ 100 >> radius 15.
+        tr = t()
+        tr.update((0.0, -100.0, 0.0))
+        assert tr.n_validated == 0
 
-    def test_no_crash_when_all_validated(self):
-        t = tracker()
-        t.on_checkpoint((1.0, 0.0, 0.0))
-        t.on_checkpoint((101.0, 0.0, 0.0))
-        t.on_checkpoint((201.0, 0.0, 0.0))
-        # Spurious extra call must not raise.
-        t.on_checkpoint((0.0, 0.0, 0.0))
-        assert t.n_validated == 3
+    def test_no_crash_after_all_validated(self):
+        tr = t()
+        for pos in [(5, 0, 0), (100, 0, 0), (200, 0, 0)]:
+            tr.update(pos)
+        tr.update((999, 0, 0))  # must not raise
 
 
-# ── fitness property ───────────────────────────────────────────────────────────
+# ── fitness formula ────────────────────────────────────────────────────────────
 
 class TestFitness:
     def test_zero_before_first_update(self):
-        # min_dist is inf → fallback returns n_validated * bonus = 0
-        assert tracker().fitness == 0.0
+        assert t().fitness == 0.0
 
-    def test_closer_position_yields_higher_fitness(self):
-        t_far = tracker()
-        t_far.update((50.0, 0.0, 0.0))
-
-        t_near = tracker()
-        t_near.update((10.0, 0.0, 0.0))
-
+    def test_closer_position_better_fitness(self):
+        t_far = t(); t_far.update((50.0, 0.0, 0.0))
+        t_near = t(); t_near.update((10.0, 0.0, 0.0))
         assert t_near.fitness > t_far.fitness
 
-    def test_checkpoint_bonus_increases_fitness(self):
-        t = tracker()
-        t.update((5.0, 0.0, 0.0))
-        before = t.fitness
-        t.on_checkpoint((1.0, 0.0, 0.0))
-        t.update((5.0, 0.0, 0.0))  # still near start, now targeting cp1
-        assert t.fitness > before
-
     def test_fitness_formula(self):
-        t = tracker()
-        t.update((40.0, 0.0, 0.0))   # 40 units from cp0
-        assert t.fitness == pytest.approx(0 * BONUS - 40.0)
+        tr = t()
+        tr.update((40.0, 0.0, 0.0))
+        assert tr.fitness == pytest.approx(0 * BONUS - 40.0)
+
+    def test_bonus_after_validation(self):
+        tr = t()
+        tr.update((5.0, 0.0, 0.0))    # validate wp0 (dist3d=5 < 15)
+        tr.update((120.0, 0.0, 0.0))  # 20 from wp1 — outside radius, not validated
+        assert tr.fitness == pytest.approx(1 * BONUS - 20.0)
+
+    def test_completion_time_bonus(self):
+        tr = FitnessTracker(WPS, BONUS, max_step_ms=1000, completion_time_bonus=500.0)
+        tr.on_finish(elapsed_ms=500)  # half of max time → 50% bonus
+        assert tr.fitness == pytest.approx(3 * BONUS + 250.0)
+
+    def test_completion_at_limit_no_time_bonus(self):
+        tr = FitnessTracker(WPS, BONUS, max_step_ms=1000, completion_time_bonus=500.0)
+        tr.on_finish(elapsed_ms=1000)
+        assert tr.fitness == pytest.approx(3 * BONUS + 0.0)
 
     def test_fitness_non_decreasing_on_approach(self):
-        t = tracker()
+        tr = t()
         prev = -math.inf
         for x in [80.0, 60.0, 40.0, 20.0, 5.0]:
-            t.update((x, 0.0, 0.0))
-            assert t.fitness >= prev
-            prev = t.fitness
+            tr.update((x, 0.0, 0.0))
+            assert tr.fitness >= prev
+            prev = tr.fitness
+
+
+# ── current_target ─────────────────────────────────────────────────────────────
+
+class TestCurrentTarget:
+    def test_initial_target(self):
+        assert t().current_target == (0.0, 0.0, 0.0)
+
+    def test_advances_after_validation(self):
+        tr = t()
+        tr.update((5.0, 0.0, 0.0))
+        assert tr.current_target == (100.0, 0.0, 0.0)
+
+    def test_none_when_complete(self):
+        tr = t()
+        tr.on_finish(0)
+        assert tr.current_target is None

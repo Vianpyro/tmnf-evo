@@ -17,16 +17,24 @@ impl Population {
     ///
     /// topology : e.g. [9, 8, 3]  (input → hidden → output)
     #[new]
-    #[pyo3(signature = (size, topology, mutation_rate=0.1, mutation_sigma=0.2, elite_count=2))]
+    #[pyo3(signature = (size, topology, mutation_rate=0.1, mutation_sigma=0.2, elite_count=2, parent_pool_frac=0.5))]
     fn new(
         size: usize,
         topology: Vec<usize>,
         mutation_rate: f32,
         mutation_sigma: f32,
         elite_count: usize,
+        parent_pool_frac: f32,
     ) -> Self {
         Self {
-            inner: RustPopulation::new(size, topology, mutation_rate, mutation_sigma, elite_count),
+            inner: RustPopulation::new(
+                size,
+                topology,
+                mutation_rate,
+                mutation_sigma,
+                elite_count,
+                parent_pool_frac,
+            ),
         }
     }
 
@@ -53,6 +61,50 @@ impl Population {
 
     fn best_fitness(&self) -> f32 {
         self.inner.best_fitness()
+    }
+
+    #[getter]
+    fn all_time_best_fitness(&self) -> f32 {
+        self.inner.all_time_best_fitness
+    }
+
+    fn get_all_time_best_weights(&self) -> Vec<f32> {
+        self.inner.all_time_best_weights.clone()
+    }
+
+    /// Restore all-time best from a checkpoint (called during resume).
+    fn set_all_time_best(&mut self, weights: Vec<f32>, fitness: f32) {
+        self.inner.all_time_best_weights = weights;
+        self.inner.all_time_best_fitness = fitness;
+    }
+
+    /// All weights, one Vec<f32> per individual (for serialization).
+    fn get_all_weights(&self) -> Vec<Vec<f32>> {
+        self.inner
+            .individuals
+            .iter()
+            .map(|ind| ind.weights.clone())
+            .collect()
+    }
+
+    /// Fitnesses in the same order as get_all_weights (before next evolve call).
+    fn get_fitnesses(&self) -> Vec<f32> {
+        self.inner
+            .individuals
+            .iter()
+            .map(|ind| ind.fitness)
+            .collect()
+    }
+
+    /// Overwrite the weights of individual `idx` (for loading a checkpoint).
+    fn set_weights_at(&mut self, idx: usize, weights: Vec<f32>) {
+        assert!(idx < self.inner.individuals.len(), "idx out of bounds");
+        self.inner.individuals[idx].weights = weights;
+    }
+
+    #[getter]
+    fn topology(&self) -> Vec<usize> {
+        self.inner.topology.clone()
     }
 }
 

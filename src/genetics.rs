@@ -15,8 +15,12 @@ pub struct Population {
     mutation_rate: f32,
     mutation_sigma: f32,
     elite_count: usize,
-    // k-tournament: pick the best of k randomly chosen individuals.
     tournament_k: usize,
+    parent_pool_size: usize,
+    // Best individual ever seen across all generations — never overwritten.
+    // Slot 0 of every next generation is always this individual.
+    pub all_time_best_fitness: f32,
+    pub all_time_best_weights: Vec<f32>,
 }
 
 impl Population {
@@ -26,11 +30,17 @@ impl Population {
         mutation_rate: f32,
         mutation_sigma: f32,
         elite_count: usize,
+        parent_pool_frac: f32,
     ) -> Self {
         assert!(
             size > elite_count,
             "elite_count must be less than population size"
         );
+
+        // At least elite_count + 1 parents so crossover always has choices.
+        let parent_pool_size = ((size as f32 * parent_pool_frac) as usize)
+            .max(elite_count + 1)
+            .min(size);
 
         let weight_count = Network::weight_count(&topology);
         let mut rng = rand::rng();
@@ -53,6 +63,9 @@ impl Population {
             mutation_sigma,
             elite_count,
             tournament_k: 3,
+            parent_pool_size,
+            all_time_best_fitness: f32::NEG_INFINITY,
+            all_time_best_weights: Vec::new(),
         }
     }
 
@@ -79,13 +92,33 @@ impl Population {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // Update all-time best before building the next generation.
+        if self.individuals[0].fitness > self.all_time_best_fitness {
+            self.all_time_best_fitness = self.individuals[0].fitness;
+            self.all_time_best_weights = self.individuals[0].weights.clone();
+        }
+
         let pop_size = self.individuals.len();
         let normal = Normal::new(0.0f32, self.mutation_sigma).unwrap();
         let mut rng = rand::rng();
         let mut next_gen: Vec<Individual> = Vec::with_capacity(pop_size);
 
-        // Elitism: carry the best individuals forward unchanged.
-        for i in 0..self.elite_count {
+        // Slot 0: all-time best — guaranteed to survive every generation.
+        let has_all_time = !self.all_time_best_weights.is_empty();
+        if has_all_time {
+            next_gen.push(Individual {
+                weights: self.all_time_best_weights.clone(),
+                fitness: 0.0,
+            });
+        }
+
+        // Remaining elite slots: current generation's top individuals.
+        let remaining_elite = if has_all_time {
+            self.elite_count.saturating_sub(1)
+        } else {
+            self.elite_count
+        };
+        for i in 0..remaining_elite.min(pop_size) {
             next_gen.push(Individual {
                 weights: self.individuals[i].weights.clone(),
                 fitness: 0.0,
@@ -122,7 +155,7 @@ impl Population {
     /// Tournament selection: returns the index of the winner.
     fn tournament_select(&self, rng: &mut ThreadRng) -> usize {
         (0..self.tournament_k)
-            .map(|_| rng.random_range(0..self.individuals.len()))
+            .map(|_| rng.random_range(0..self.parent_pool_size))
             .max_by(|&a, &b| {
                 self.individuals[a]
                     .fitness

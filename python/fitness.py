@@ -1,95 +1,111 @@
 import math
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 Vec3 = Tuple[float, float, float]
+Waypoint = Dict  # {"pos": [x, y, z], "radius": float, "note": str (optional)}
 
 
-def dist3(a: Vec3, b: Vec3) -> float:
+def _dist_2d(a: Vec3, b) -> float:
+    """Horizontal (x, z) distance — prevents rewarding underground proximity."""
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[2] - b[2]) ** 2)
+
+
+def _dist_3d(a: Vec3, b) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
 class FitnessTracker:
-    """Computes fitness for a single agent run.
+    """Sequential waypoint fitness for a single agent run.
 
-    fitness = n_validated * bonus - min_dist_to_nearest_unvalidated
+    Waypoints must be validated in order. Validation uses 3D proximity
+    (the car must physically enter the waypoint sphere). The fitness gradient
+    uses 2D horizontal distance to avoid rewarding underground positions.
 
-    Checkpoints are treated as an unordered set: any unvalidated checkpoint
-    can be targeted, which allows shortcuts to emerge naturally.  When a
-    checkpoint is triggered, we identify it by proximity (the car must be
-    adjacent) and mark it as validated.
-
-    min_dist tracks the closest approach ever made to *any* unvalidated
-    checkpoint this run, so fitness is monotonically non-decreasing.
-    It resets when a new nearest checkpoint is elected after a validation.
+    fitness (incomplete) = n_done * bonus - min_2d_dist_to_current_target
+    fitness (complete)   = n_done * bonus + (1 - elapsed/max_ms) * completion_bonus
     """
 
-    def __init__(self, checkpoint_positions: List[Vec3], bonus: float) -> None:
-        self._checkpoints = checkpoint_positions
+    def __init__(
+        self,
+        waypoints: List[Waypoint],
+        bonus: float,
+        max_step_ms: int = 300_000,
+        completion_time_bonus: float = 0.0,
+        speed_bonus_factor: float = 0.0,
+    ) -> None:
+        self._waypoints = waypoints
         self._bonus = bonus
-        self._validated: set[int] = set()
+        self._max_step_ms = max_step_ms
+        self._completion_bonus = completion_time_bonus
+        self._speed_factor = speed_bonus_factor
+        self._current: int = 0
         self._min_dist: float = math.inf
-        self._nearest_idx: int = -1   # cached after each update()
+        self._elapsed_ms: Optional[int] = None
+        self._speed_sum: float = 0.0
+        self._n_steps: int = 0
 
     # ------------------------------------------------------------------
     # Called every simulation step.
     # ------------------------------------------------------------------
 
-    def update(self, pos: Vec3) -> None:
-        """Find nearest unvalidated checkpoint and update min_dist."""
-        best_dist = math.inf
-        best_idx = -1
-        for i, cp in enumerate(self._checkpoints):
-            if i in self._validated:
-                continue
-            d = dist3(pos, cp)
-            if d < best_dist:
-                best_dist = d
-                best_idx = i
+    def update(self, pos: Vec3, speed_kmh: float = 0.0) -> None:
+        self._speed_sum += speed_kmh
+        self._n_steps += 1
 
-        self._nearest_idx = best_idx
-        if best_dist < self._min_dist:
-            self._min_dist = best_dist
-
-    # ------------------------------------------------------------------
-    # Called when TMInterface fires on_checkpoint_count_changed.
-    # pos: car position at the moment of validation.
-    # ------------------------------------------------------------------
-
-    def on_checkpoint(self, pos: Vec3) -> None:
-        """Mark the nearest unvalidated checkpoint as validated."""
-        if not self._unvalidated_indices():
+        if self._current >= len(self._waypoints):
             return
 
-        nearest = min(
-            self._unvalidated_indices(),
-            key=lambda i: dist3(pos, self._checkpoints[i]),
-        )
-        self._validated.add(nearest)
-        # Reset min_dist so we start fresh toward the new nearest target.
-        self._min_dist = math.inf
-        self._nearest_idx = -1
+        wp = self._waypoints[self._current]
+        target = wp["pos"]
+        radius = wp.get("radius", 15.0)
+
+        # 2D gradient: guide toward target horizontally.
+        d2d = _dist_2d(pos, target)
+        if d2d < self._min_dist:
+            self._min_dist = d2d
+
+        # 3D validation: car must enter the waypoint sphere.
+        if _dist_3d(pos, target) < radius:
+            self._current += 1
+            self._min_dist = math.inf  # fresh tracking for next target
+
+    # ------------------------------------------------------------------
+    # Called when the game signals all checkpoints completed.
+    # ------------------------------------------------------------------
+
+    def on_finish(self, elapsed_ms: int) -> None:
+        self._current = len(self._waypoints)
+        self._elapsed_ms = elapsed_ms
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
 
     @property
-    def fitness(self) -> float:
-        n = len(self._validated)
-        if self._min_dist == math.inf:
-            return float(n) * self._bonus
-        return n * self._bonus - self._min_dist
-
-    @property
     def n_validated(self) -> int:
-        return len(self._validated)
+        return self._current
 
     @property
-    def nearest_unvalidated(self) -> Optional[Vec3]:
-        """Position of the currently nearest unvalidated checkpoint, or None."""
-        if self._nearest_idx >= 0:
-            return self._checkpoints[self._nearest_idx]
+    def is_complete(self) -> bool:
+        return self._current >= len(self._waypoints)
+
+    @property
+    def current_target(self) -> Optional[Vec3]:
+        """Position of the next waypoint to reach, or None if done."""
+        if self._current < len(self._waypoints):
+            return tuple(self._waypoints[self._current]["pos"])
         return None
 
-    def _unvalidated_indices(self) -> List[int]:
-        return [i for i in range(len(self._checkpoints)) if i not in self._validated]
+    @property
+    def fitness(self) -> float:
+        n = self._current
+        avg_spd = self._speed_sum / self._n_steps if self._n_steps > 0 else 0.0
+        base = float(n) * self._bonus + avg_spd * self._speed_factor
+
+        if self._elapsed_ms is not None:
+            remaining = max(0.0, 1.0 - self._elapsed_ms / self._max_step_ms)
+            return base + remaining * self._completion_bonus
+
+        if self._min_dist == math.inf:
+            return base
+        return base - self._min_dist
